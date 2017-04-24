@@ -35,7 +35,7 @@ namespace Kendo.DynamicLinq
 			queryable = Sort(queryable, sort);
 
 			// Finally page the data
-			if (take > 0) 
+			if (take > 0)
             {
 				queryable = Page(queryable, take, skip);
 			}
@@ -75,27 +75,99 @@ namespace Kendo.DynamicLinq
 	        return queryable.ToDataSourceResult(request.Take, request.Skip, request.Sort, request.Filter, null);
 	    }
 
-		private static IQueryable<T> Filter<T>(IQueryable<T> queryable, Filter filter)
-		{
-			if (filter != null && filter.Logic != null)
-			{
-				// Collect a flat list of all filters
-				var filters = filter.All();
+        private static IQueryable<T> Filter<T>(IQueryable<T> queryable, Filter filter)
+        {
+            if ((filter != null) && (filter.Logic != null))
+            {
+                // Collect a flat list of all filters
+                var filters = filter.All();
 
-				// Get all filter values as array (needed by the Where method of Dynamic Linq)
-				var values = filters.Select(f => f.Value).ToArray();
+                // Get all filter values as array (needed by the Where method of Dynamic Linq)
+                var values = filters.Select(f => f.Value is string ? f.Value.ToString().ToLower() : f.Value).ToArray();
 
-				// Create a predicate expression e.g. Field1 = @0 And Field2 > @1
-				string predicate = filter.ToExpression(filters);
+                ////Add toLower() for all filter Fields with type of string in the values
+                for (var i = 0; i < values.Length; i++)
+                {
+                    if (values[i] is string)
+                    {
+                        filters[i].Field = string.Format("{0}.ToString().ToLower()", filters[i].Field);
+                    }
+                    // when we have a decimal value it gets converted to double and the query will break
+                    if (values[i] is double)
+                    {
+                        values[i] = Convert.ToDecimal(values[i]);
+                    }
+                    if (values[i] is DateTime)
+                    {
+                        var dateTimeFilterValue = (DateTime)values[i];
+                        values[i] = new DateTime(dateTimeFilterValue.Year, dateTimeFilterValue.Month,
+                            dateTimeFilterValue.Day, 0, 0, 0);
+                    }
+                }
 
-				// Use the Where method of Dynamic Linq to filter the data
-				queryable = queryable.Where(predicate, values);
-			}
+                var valuesList = values.ToList();
 
-			return queryable;
-		}
+                //Remove duplicate filters
+                //NOTE: we loop, and don't use .distinct for a reason!
+                //There is a minuscule chance different columns will filter by the same value, in which case using distinct will remove too many filters
+                for (int i = filters.Count - 1; i >= 0; i--)
+                {
+                    var previousFilter = filters.ElementAtOrDefault(i - 1);
 
-		private static object Aggregate<T>(IQueryable<T> queryable, IEnumerable<Aggregator> aggregates)
+                    if (previousFilter != null && filters[i].Equals(previousFilter))
+                    {
+                        filters.RemoveAt(i);
+
+                        valuesList.RemoveAt(i);
+                    }
+                }
+                var filtersList = filters.ToList();
+                for (int i = 0; i < filters.Count; i++)
+                {
+                    if (filters[i].Value is DateTime && filters[i].Operator == "eq")
+                    {
+                        var filterToEdit = filtersList[i];
+
+                        //Copy the date from the filter
+                        var baseDate = ((DateTime)filters[i].Value).Date;
+
+                        //Instead of comparing for exact equality, we compare as greater than the start of the day...
+                        filterToEdit.Value = new DateTime(baseDate.Year, baseDate.Month, baseDate.Day, 0, 0, 0);
+                        filterToEdit.Operator = "gte";
+                        valuesList[i] = filterToEdit.Value;
+
+                        //...and less than the end of that same day (we're making an additional filter here)
+                        var newFilter = new Filter()
+                        {
+                            Value = new DateTime(baseDate.Year, baseDate.Month, baseDate.Day, 23, 59, 59),
+                            Field = filters[i].Field,
+                            Filters = filters[i].Filters,
+                            Operator = "lte",
+                            Logic = "and"
+                        };
+
+                        //Add that additional filter to the list of filters
+                        filtersList.Add(newFilter);
+                        valuesList.Add(newFilter.Value);
+                    }
+                }
+
+                values = valuesList.ToArray();
+                filters = filtersList;
+                //Set the filters, since we may have edited them
+                filter.Filters = filtersList;
+
+                // Create a predicate expression e.g. Field1 = @0 And Field2 > @1
+                var predicate = filter.ToExpression(filters);
+
+                // Use the Where method of Dynamic Linq to filter the data
+                queryable = queryable.Where(predicate, values);
+            }
+
+            return queryable;
+        }
+
+        private static object Aggregate<T>(IQueryable<T> queryable, IEnumerable<Aggregator> aggregates)
 		{
 			if (aggregates != null && aggregates.Any())
 			{
