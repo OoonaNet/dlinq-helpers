@@ -88,9 +88,14 @@ namespace Kendo.DynamicLinq
                 ////Add toLower() for all filter Fields with type of string in the values
                 for (var i = 0; i < values.Length; i++)
                 {
+                    var propertyType = typeof(T).GetProperty(filters[i].Field).PropertyType;
+
                     if (values[i] is string)
                     {
-                        filters[i].Field = string.Format("{0}.ToString().ToLower()", filters[i].Field);
+                        if(Nullable.GetUnderlyingType(propertyType) != typeof(Guid))
+                        {
+                            filters[i].Field = string.Format("{0}.ToString().ToLower()", filters[i].Field);
+                        }
                     }
                     // when we have a decimal value it gets converted to double and the query will break
                     if (values[i] is double)
@@ -102,6 +107,10 @@ namespace Kendo.DynamicLinq
                         var dateTimeFilterValue = (DateTime)values[i];
                         values[i] = new DateTime(dateTimeFilterValue.Year, dateTimeFilterValue.Month,
                             dateTimeFilterValue.Day, 0, 0, 0);
+                    }
+                    if (Nullable.GetUnderlyingType(propertyType) == typeof(Guid) || propertyType == typeof(Guid))
+                    {
+                        values[i] = Guid.Parse(values[i].ToString());
                     }
                 }
 
